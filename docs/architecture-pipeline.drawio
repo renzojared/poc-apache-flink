@@ -1,0 +1,264 @@
+<mxfile host="app.diagrams.net">
+  <diagram id="pipeline-dag" name="1. Pipeline Lógico (Stream DAG)">
+    <mxGraphModel>
+  <root>
+    <mxCell id="0"/>
+    <mxCell id="1" parent="0"/>
+
+    <mxCell id="col1" value="1. Ingestión CDC &amp; Transporte" style="swimlane;startSize=28;rounded=1;fillColor=#f8fafc;strokeColor=#cbd5e1;fontStyle=1;fontColor=#334155;html=1;" vertex="1" parent="1">
+      <mxGeometry x="40" y="40" width="310" height="490" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="src_mov" value="&lt;b&gt;Kafka: movements.incoming&lt;/b&gt;&lt;br/&gt;• Stream 1: Transacciones CDC (op=&#39;u&#39;)&lt;br/&gt;• Particionado: hash(account_id) % N&lt;br/&gt;• Deduplicación: Monotonic LSN Check" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=8;html=1;" vertex="1" parent="col1">
+      <mxGeometry x="15" y="45" width="280" height="100" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="src_curr" value="&lt;b&gt;Kafka: movements.currencies&lt;/b&gt;&lt;br/&gt;• Stream 2: Metadatos de Moneda&lt;br/&gt;• Particionado: hash(account_id) % N&lt;br/&gt;• Asíncrono / Fuera de orden" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=8;html=1;" vertex="1" parent="col1">
+      <mxGeometry x="15" y="195" width="280" height="95" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="src_rules" value="&lt;b&gt;Kafka: config.rules&lt;/b&gt;&lt;br/&gt;• Stream de Control Dinámico&lt;br/&gt;• Reglas de Negocio / Límites AML&lt;br/&gt;• Hot Reloading sin reinicio de JAR" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=left;spacingLeft=8;html=1;" vertex="1" parent="col1">
+      <mxGeometry x="15" y="340" width="280" height="95" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="col2" value="2. Dual-Stream Join &amp; Estado (ADR-002)" style="swimlane;startSize=28;rounded=1;fillColor=#faf5ff;strokeColor=#e9d5ff;fontStyle=1;fontColor=#581c87;html=1;" vertex="1" parent="1">
+      <mxGeometry x="400" y="40" width="350" height="490" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="join_box" value="&lt;b&gt;MovementCurrencyCoProcessFunction&lt;/b&gt;&lt;br/&gt;&lt;i&gt;Transporte: keyBy(movementId)&lt;/i&gt;&lt;hr/&gt;&lt;b&gt;Gestión de Estado (RocksDB / NVMe):&lt;/b&gt;&lt;br/&gt;• &lt;b&gt;Moneda primero:&lt;/b&gt; ValueState&amp;lt;Currency&amp;gt;&lt;br/&gt;  ↳ &lt;i&gt;24h State TTL (C++ compactFilter silencioso)&lt;/i&gt;&lt;br/&gt;• &lt;b&gt;Movimiento primero:&lt;/b&gt; ListState&amp;lt;Movement&amp;gt;&lt;br/&gt;  ↳ &lt;i&gt;Buffer temporal + TimerService&lt;/i&gt;&lt;br/&gt;• &lt;b&gt;SLA Activo:&lt;/b&gt; Timer de 30 segundos&lt;br/&gt;• &lt;b&gt;Match:&lt;/b&gt; Enriquecimiento Inmediato" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f3e8ff;strokeColor=#a855f7;align=left;spacingLeft=8;html=1;" vertex="1" parent="col2">
+      <mxGeometry x="15" y="45" width="320" height="245" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="checkpoint_box" value="&lt;b&gt;Checkpoints &amp; Durabilidad (ABS)&lt;/b&gt;&lt;br/&gt;• Algoritmo Chandy-Lamport Asíncrono&lt;br/&gt;• Snapshots Incrementales SST a S3&lt;br/&gt;• Offsets de Kafka persistidos en Snapshot" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;align=left;spacingLeft=8;html=1;" vertex="1" parent="col2">
+      <mxGeometry x="15" y="340" width="320" height="95" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="e_cp_internal" value="Snapshot Asíncrono" edge="1" parent="col2" source="join_box" target="checkpoint_box" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#0284c7;strokeWidth=1;dashed=1;fontColor=#0369a1;">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="col3" value="3. Reglas Dinámicas In-Memory (ADR-005)" style="swimlane;startSize=28;rounded=1;fillColor=#f0fdf4;strokeColor=#bbf7d0;fontStyle=1;fontColor=#14532d;html=1;" vertex="1" parent="1">
+      <mxGeometry x="800" y="40" width="340" height="490" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="broadcast_box" value="&lt;b&gt;DynamicRuleBroadcastProcessFunction&lt;/b&gt;&lt;br/&gt;&lt;i&gt;Transporte: .broadcast(ruleStateDesc)&lt;/i&gt;&lt;hr/&gt;&lt;b&gt;Patrón In-Memory (Cero Redis):&lt;/b&gt;&lt;br/&gt;• Replicación a 100% de Task Slots&lt;br/&gt;• ReadOnlyBroadcastState en RAM local&lt;br/&gt;• Latencia de Evaluación: &amp;lt; 1 microsegundo&lt;br/&gt;• Cero Roundtrips de Red / Cero Cuellos de Botella" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dcfce7;strokeColor=#22c55e;align=left;spacingLeft=8;html=1;" vertex="1" parent="col3">
+      <mxGeometry x="15" y="145" width="310" height="200" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="col4" value="4. Sinks de Salida &amp; Exactly-Once" style="swimlane;startSize=28;rounded=1;fillColor=#f8fafc;strokeColor=#cbd5e1;fontStyle=1;fontColor=#1e293b;html=1;" vertex="1" parent="1">
+      <mxGeometry x="1190" y="40" width="310" height="490" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="sink_alert" value="&lt;b&gt;Kafka: movements.alerts&lt;/b&gt;&lt;br/&gt;• &lt;b&gt;Side Output:&lt;/b&gt; TIMEOUT_ALERTS_TAG&lt;br/&gt;• Huérfanos sin moneda (&amp;gt; 30s SLA)&lt;br/&gt;• Dead-Letter Queue para Operaciones" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fee2e2;strokeColor=#ef4444;align=left;spacingLeft=8;html=1;" vertex="1" parent="col4">
+      <mxGeometry x="15" y="45" width="280" height="100" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="sink_dynamo" value="&lt;b&gt;DynamoDB Ledger Store (ADR-003)&lt;/b&gt;&lt;br/&gt;• Clave Determinista: UUID(movement_id)&lt;br/&gt;• &lt;b&gt;Upsert Idempotente:&lt;/b&gt; Cero Duplicados&lt;br/&gt;• Exactitud Financiera Auditable" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#fef08a;strokeColor=#ca8a04;align=left;spacingLeft=8;html=1;" vertex="1" parent="col4">
+      <mxGeometry x="15" y="195" width="280" height="100" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="storage_s3" value="&lt;b&gt;AWS S3 / Durable Storage&lt;/b&gt;&lt;br/&gt;• Checkpoints Incrementales (Tolerancia a Fallos)&lt;br/&gt;• Savepoints para Upgrades sin Downtime" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#bae6fd;strokeColor=#0284c7;align=left;spacingLeft=8;html=1;" vertex="1" parent="col4">
+      <mxGeometry x="15" y="340" width="280" height="95" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="e_mov" value="keyBy(movementId)" edge="1" parent="1" source="src_mov" target="join_box" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6c8ebf;strokeWidth=2;fontColor=#1e3a8a;">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="e_curr" value="keyBy(movementId)" edge="1" parent="1" source="src_curr" target="join_box" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6c8ebf;strokeWidth=2;fontColor=#1e3a8a;">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="e_timeout" value="onTimer (&gt; 30s SLA)" edge="1" parent="1" source="join_box" target="sink_alert" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#ef4444;strokeWidth=2;dashed=1;fontColor=#b91c1c;">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="e_match" value="EnrichedMatch (In-SLA)" edge="1" parent="1" source="join_box" target="broadcast_box" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#22c55e;strokeWidth=2;fontColor=#15803d;">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="e_rules" value="broadcast() a todos los slots" edge="1" parent="1" source="src_rules" target="broadcast_box" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#d97706;strokeWidth=2;dashed=1;fontColor=#b45309;">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="e_dynamo" value="Transacciones Aprobadas" edge="1" parent="1" source="broadcast_box" target="sink_dynamo" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#ca8a04;strokeWidth=2;fontColor=#854d0e;">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="e_s3" value="Persistencia SST" edge="1" parent="1" source="checkpoint_box" target="storage_s3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#0284c7;strokeWidth=1;dashed=1;fontColor=#0369a1;">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+
+  </root>
+</mxGraphModel>
+  </diagram>
+  <diagram id="eks-infra" name="2. Infraestructura Cloud (AWS EKS &amp; Operator)"><mxGraphModel>
+  <root>
+    <mxCell id="0"/>
+    <mxCell id="1" parent="0"/>
+
+    <!-- ========================================== -->
+    <!-- TIER 1: El Flujo de Control y Decisión -->
+    <!-- ========================================== -->
+    <mxCell id="step1_yaml" value="&lt;b&gt;Paso 1: Archivo de Configuración (YAML)&lt;/b&gt;&lt;br/&gt;&lt;hr/&gt;• Pedimos duplicar trabajadores:&lt;br/&gt;  &lt;b&gt;replicas: 2 → 4&lt;/b&gt;&lt;br/&gt;• Modo seguro para no perder datos:&lt;br/&gt;  &lt;i&gt;upgradeMode: savepoint&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8fafc;strokeColor=#94a3b8;align=left;spacingLeft=10;html=1;" vertex="1" parent="1">
+      <mxGeometry x="40" y="50" width="310" height="120" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="step2_eks" value="&lt;b&gt;Paso 2: Kubernetes API (AWS EKS)&lt;/b&gt;&lt;br/&gt;&lt;hr/&gt;• Recibe la orden de configuración.&lt;br/&gt;• Registra el cambio solicitado.&lt;br/&gt;• Avisa al Operador de Flink que hay&lt;br/&gt;  nuevas instrucciones." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ede9fe;strokeColor=#8b5cf6;align=left;spacingLeft=10;html=1;" vertex="1" parent="1">
+      <mxGeometry x="410" y="50" width="310" height="120" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="step3_operator" value="&lt;b&gt;Paso 3: Flink Operator (El Administrador)&lt;/b&gt;&lt;br/&gt;&lt;hr/&gt;• Lee las nuevas instrucciones.&lt;br/&gt;• Pide a Kubernetes crear &lt;b&gt;2 nuevos Pods&lt;/b&gt;&lt;br/&gt;  de trabajadores (TaskManagers).&lt;br/&gt;• Si es cambio de versión: guarda estado en S3." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fae8ff;strokeColor=#d946ef;align=left;spacingLeft=10;html=1;" vertex="1" parent="1">
+      <mxGeometry x="780" y="50" width="330" height="120" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="step4_karpenter" value="&lt;b&gt;Paso 4: Autoescalador de Máquinas (Karpenter)&lt;/b&gt;&lt;br/&gt;&lt;hr/&gt;• Revisa si hay espacio en las máquinas actuales.&lt;br/&gt;• &lt;b&gt;¿Máquinas llenas?&lt;/b&gt; Pide a AWS crear una&lt;br/&gt;  nueva máquina virtual EC2 de inmediato (&amp;lt; 45s)." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fef9c3;strokeColor=#eab308;align=left;spacingLeft=10;html=1;" vertex="1" parent="1">
+      <mxGeometry x="1170" y="50" width="350" height="120" as="geometry"/>
+    </mxCell>
+
+    <!-- Conectores Tier 1 (Horizontales limpios) -->
+    <mxCell id="e_step1_to_2" value="1. kubectl apply" edge="1" parent="1" source="step1_yaml" target="step2_eks" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#94a3b8;fontColor=#475569;strokeWidth=1;">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="e_step2_to_3" value="2. Notifica cambio" edge="1" parent="1" source="step2_eks" target="step3_operator" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#8b5cf6;fontColor=#6d28d9;strokeWidth=1;">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="e_step3_to_4" value="3. Solicita nuevos Pods" edge="1" parent="1" source="step3_operator" target="step4_karpenter" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#d946ef;fontColor=#a21caf;strokeWidth=1;">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+
+    <!-- ========================================== -->
+    <!-- TIER 2: El Clúster Físico (Máquinas EC2 y Pods) -->
+    <!-- ========================================== -->
+    <mxCell id="eks_cluster_box" value="Plataforma de Cómputo: Máquinas Virtuales EC2 en AWS EKS (Red Privada)" style="swimlane;startSize=30;rounded=1;fillColor=#f8fafc;strokeColor=#cbd5e1;fontStyle=1;fontColor=#1e293b;html=1;" vertex="1" parent="1">
+      <mxGeometry x="40" y="230" width="1480" height="500" as="geometry"/>
+    </mxCell>
+
+    <!-- Máquina 1: Master (Coordinador) -->
+    <mxCell id="ec2_master" value="EC2 1: Servidor Master (m5.large)" style="swimlane;startSize=26;rounded=1;fillColor=#f1f5f9;strokeColor=#94a3b8;fontStyle=1;fontColor=#334155;html=1;" vertex="1" parent="eks_cluster_box">
+      <mxGeometry x="20" y="45" width="330" height="435" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="pod_jm" value="&lt;b&gt;Pod: JobManager (El Coordinador)&lt;/b&gt;&lt;br/&gt;&lt;i&gt;El cerebro central del clúster&lt;/i&gt;&lt;hr/&gt;• &lt;b&gt;JobMaster:&lt;/b&gt; Reparte las tareas del pipeline.&lt;br/&gt;• &lt;b&gt;ResourceManager:&lt;/b&gt; Lleva la cuenta de qué&lt;br/&gt;  trabajadores y slots están disponibles.&lt;br/&gt;• &lt;b&gt;Panel Web / API:&lt;/b&gt; Dashboard en puerto 8081." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dbeafe;strokeColor=#3b82f6;align=left;spacingLeft=8;html=1;" vertex="1" parent="ec2_master">
+      <mxGeometry x="15" y="40" width="300" height="150" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="pod_operator" value="&lt;b&gt;Pod: Flink Operator (El Vigilante)&lt;/b&gt;&lt;br/&gt;&lt;i&gt;Programa que corre dentro de Kubernetes&lt;/i&gt;&lt;hr/&gt;• Vigila la salud del JobManager y trabajadores.&lt;br/&gt;• Ejecuta las órdenes de cambio del YAML.&lt;br/&gt;• Se encarga del reinicio automático ante fallos." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fae8ff;strokeColor=#d946ef;align=left;spacingLeft=8;html=1;" vertex="1" parent="ec2_master">
+      <mxGeometry x="15" y="210" width="300" height="120" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="note_master" value="&lt;b&gt;¿Por qué está en su propia máquina?&lt;/b&gt;&lt;br/&gt;Para que si los trabajadores se saturan con millones de transacciones, el cerebro nunca se quede sin memoria ni se apague." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e2e8f0;strokeColor=#94a3b8;align=left;spacingLeft=8;fontColor=#475569;fontSize=11;html=1;" vertex="1" parent="ec2_master">
+      <mxGeometry x="15" y="345" width="300" height="75" as="geometry"/>
+    </mxCell>
+
+    <!-- Máquina 2: Worker 1 (Trabajadores Existentes) -->
+    <mxCell id="ec2_worker_1" value="EC2 2: Servidor Worker (c5d.4xlarge - 16 CPU, 32 GB RAM)" style="swimlane;startSize=26;rounded=1;fillColor=#f1f5f9;strokeColor=#94a3b8;fontStyle=1;fontColor=#334155;html=1;" vertex="1" parent="eks_cluster_box">
+      <mxGeometry x="380" y="45" width="530" height="435" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="pod_tm_1" value="&lt;b&gt;Pod: TaskManager 1&lt;/b&gt;&lt;br/&gt;&lt;i&gt;Trabajador 1 (4 CPU, 8 GB)&lt;/i&gt;&lt;hr/&gt;&lt;b&gt;Hilos de Trabajo (Slots):&lt;/b&gt;&lt;br/&gt;• &lt;b&gt;Slot 1:&lt;/b&gt; Lee movimientos y cruza monedas.&lt;br/&gt;• &lt;b&gt;Slot 2:&lt;/b&gt; Aplica reglas de negocio.&lt;br/&gt;&lt;hr/&gt;• &lt;b&gt;Memoria RAM:&lt;/b&gt; Cálculos rápidos en vivo.&lt;br/&gt;• &lt;b&gt;Red:&lt;/b&gt; Envía datos al otro trabajador." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dcfce7;strokeColor=#22c55e;align=left;spacingLeft=8;html=1;" vertex="1" parent="ec2_worker_1">
+      <mxGeometry x="15" y="40" width="240" height="230" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="pod_tm_2" value="&lt;b&gt;Pod: TaskManager 2&lt;/b&gt;&lt;br/&gt;&lt;i&gt;Trabajador 2 (4 CPU, 8 GB)&lt;/i&gt;&lt;hr/&gt;&lt;b&gt;Hilos de Trabajo (Slots):&lt;/b&gt;&lt;br/&gt;• &lt;b&gt;Slot 1:&lt;/b&gt; Lee movimientos y cruza monedas.&lt;br/&gt;• &lt;b&gt;Slot 2:&lt;/b&gt; Aplica reglas de negocio.&lt;br/&gt;&lt;hr/&gt;• &lt;b&gt;Memoria RAM:&lt;/b&gt; Cálculos rápidos en vivo.&lt;br/&gt;• &lt;b&gt;Red:&lt;/b&gt; Envía datos al otro trabajador." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dcfce7;strokeColor=#22c55e;align=left;spacingLeft=8;html=1;" vertex="1" parent="ec2_worker_1">
+      <mxGeometry x="275" y="40" width="240" height="230" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="nvme_box_1" value="&lt;b&gt;Disco Rápido Local (NVMe físico de la máquina EC2)&lt;/b&gt;&lt;br/&gt;• Disco ultra veloz instalado directamente en la máquina física.&lt;br/&gt;• Los dos trabajadores lo usan para guardar el historial sin demoras de red." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fef3c7;strokeColor=#d97706;align=left;spacingLeft=8;html=1;" vertex="1" parent="ec2_worker_1">
+      <mxGeometry x="15" y="295" width="500" height="125" as="geometry"/>
+    </mxCell>
+
+    <!-- Máquina 3: Worker 2 (Trabajadores Nuevos por Autoescalado) -->
+    <mxCell id="ec2_worker_2" value="EC2 3: Servidor Worker [CREADO POR KARPENTER AL ESCALAR]" style="swimlane;startSize=26;rounded=1;fillColor=#fefce8;strokeColor=#ca8a04;dashed=1;fontStyle=1;fontColor=#854d0e;html=1;" vertex="1" parent="eks_cluster_box">
+      <mxGeometry x="930" y="45" width="530" height="435" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="pod_tm_3" value="&lt;b&gt;Pod: TaskManager 3 (Nuevo)&lt;/b&gt;&lt;br/&gt;&lt;i&gt;Trabajador 3 creado al escalar&lt;/i&gt;&lt;hr/&gt;&lt;b&gt;Nuevos Hilos de Trabajo:&lt;/b&gt;&lt;br/&gt;• &lt;b&gt;Slot 1:&lt;/b&gt; Absorbe nuevas particiones.&lt;br/&gt;• &lt;b&gt;Slot 2:&lt;/b&gt; Absorbe nuevas particiones.&lt;br/&gt;&lt;hr/&gt;• Se conecta al JobManager para ponerse a disposición de inmediato." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fef08a;strokeColor=#ca8a04;dashed=1;align=left;spacingLeft=8;html=1;" vertex="1" parent="ec2_worker_2">
+      <mxGeometry x="15" y="40" width="240" height="230" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="pod_tm_4" value="&lt;b&gt;Pod: TaskManager 4 (Nuevo)&lt;/b&gt;&lt;br/&gt;&lt;i&gt;Trabajador 4 creado al escalar&lt;/i&gt;&lt;hr/&gt;&lt;b&gt;Nuevos Hilos de Trabajo:&lt;/b&gt;&lt;br/&gt;• &lt;b&gt;Slot 1:&lt;/b&gt; Absorbe nuevas particiones.&lt;br/&gt;• &lt;b&gt;Slot 2:&lt;/b&gt; Absorbe nuevas particiones.&lt;br/&gt;&lt;hr/&gt;• Se conecta al JobManager para ponerse a disposición de inmediato." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fef08a;strokeColor=#ca8a04;dashed=1;align=left;spacingLeft=8;html=1;" vertex="1" parent="ec2_worker_2">
+      <mxGeometry x="275" y="40" width="240" height="230" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="nvme_box_2" value="&lt;b&gt;Nuevo Disco Rápido Local (NVMe de la nueva máquina)&lt;/b&gt;&lt;br/&gt;• Se monta automáticamente al encender la nueva máquina EC2.&lt;br/&gt;• Recibe copias del estado desde S3 para que los nuevos trabajadores continúen." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fef3c7;strokeColor=#d97706;dashed=1;align=left;spacingLeft=8;html=1;" vertex="1" parent="ec2_worker_2">
+      <mxGeometry x="15" y="295" width="500" height="125" as="geometry"/>
+    </mxCell>
+
+    <!-- Conectores Internos Limpios de Tier 2 -->
+    <mxCell id="e_jm_to_tm1" value="Asigna trabajo" edge="1" parent="eks_cluster_box" source="pod_jm" target="pod_tm_1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#3b82f6;fontColor=#1d4ed8;strokeWidth=1;">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="e_tm1_to_tm2" value="Datos por red" edge="1" parent="ec2_worker_1" source="pod_tm_1" target="pod_tm_2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#22c55e;fontColor=#15803d;strokeWidth=1;dashed=1;">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+
+    <!-- Conector de Karpenter creando la máquina EC2 3 (Línea limpia que entra por arriba) -->
+    <mxCell id="e_karpenter_creates_ec2" value="4. Enciende nueva máquina EC2 en AWS" edge="1" parent="1" source="step4_karpenter" target="ec2_worker_2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#eab308;strokeWidth=2;dashed=1;fontColor=#a16207;">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="1345" y="200"/>
+          <mxPoint x="1235" y="200"/>
+        </Array>
+      </mxGeometry>
+    </mxCell>
+
+    <!-- Conector de retorno: Auto-registro en corredor libre superior -->
+    <mxCell id="e_tm3_registers_jm" value="5. Los nuevos trabajadores se registran ante el Coordinador (puerto 6123)" edge="1" parent="1" source="pod_tm_3" target="pod_jm" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#3b82f6;strokeWidth=2;dashed=1;fontColor=#1d4ed8;">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="1090" y="200"/>
+          <mxPoint x="225" y="200"/>
+        </Array>
+      </mxGeometry>
+    </mxCell>
+
+    <!-- ========================================== -->
+    <!-- TIER 3: Servicios Externos y Almacenamiento -->
+    <!-- ========================================== -->
+    <mxCell id="srv_s3" value="&lt;b&gt;AWS S3 (Almacén de Respaldo)&lt;/b&gt;&lt;br/&gt;&lt;hr/&gt;• Guarda fotos de seguridad cada 10 segundos.&lt;br/&gt;• Guarda el estado completo al actualizar versión.&lt;br/&gt;• Si una máquina muere, se restaura desde aquí." style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#bae6fd;strokeColor=#0284c7;align=left;spacingLeft=8;html=1;" vertex="1" parent="1">
+      <mxGeometry x="40" y="770" width="450" height="130" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="srv_kafka" value="&lt;b&gt;Apache Kafka (Entrada y Salida de Mensajes)&lt;/b&gt;&lt;br/&gt;&lt;hr/&gt;• Entrega los movimientos y monedas a procesar.&lt;br/&gt;• Recibe las alertas de transacciones sospechosas.&lt;br/&gt;• Separa la mensajería del cómputo para no mezclar." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fed7aa;strokeColor=#ea580c;align=left;spacingLeft=8;html=1;" vertex="1" parent="1">
+      <mxGeometry x="540" y="770" width="450" height="130" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="srv_dynamo" value="&lt;b&gt;AWS DynamoDB (Base de Datos Final)&lt;/b&gt;&lt;br/&gt;&lt;hr/&gt;• Guarda los movimientos aprobados y consolidados.&lt;br/&gt;• Usa el identificador único para no duplicar datos si&lt;br/&gt;  un mensaje se reintenta tras una caída." style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#fef08a;strokeColor=#ca8a04;align=left;spacingLeft=8;html=1;" vertex="1" parent="1">
+      <mxGeometry x="1040" y="770" width="480" height="130" as="geometry"/>
+    </mxCell>
+
+    <!-- Conectores limpios hacia Tier 3 (Rectos hacia abajo, sin cruzarse) -->
+    <mxCell id="e_worker_to_s3" value="Guarda copias de seguridad periódicas" edge="1" parent="1" source="ec2_worker_1" target="srv_s3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#0284c7;strokeWidth=1;dashed=1;fontColor=#0369a1;">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="480" y="750"/>
+          <mxPoint x="265" y="750"/>
+        </Array>
+      </mxGeometry>
+    </mxCell>
+
+    <mxCell id="e_worker_to_kafka" value="Lee movimientos y emite alertas" edge="1" parent="1" source="ec2_worker_1" target="srv_kafka" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#ea580c;strokeWidth=1;fontColor=#c2410c;">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="765" y="750"/>
+          <mxPoint x="765" y="750"/>
+        </Array>
+      </mxGeometry>
+    </mxCell>
+
+    <mxCell id="e_worker_to_dynamo" value="Escribe transacciones finales aprobadas" edge="1" parent="1" source="ec2_worker_2" target="srv_dynamo" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#ca8a04;strokeWidth=1;fontColor=#a16207;">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="1200" y="750"/>
+          <mxPoint x="1280" y="750"/>
+        </Array>
+      </mxGeometry>
+    </mxCell>
+
+  </root>
+</mxGraphModel></diagram>
+</mxfile>

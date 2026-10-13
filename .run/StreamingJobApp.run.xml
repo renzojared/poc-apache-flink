@@ -1,0 +1,20 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="StreamingJobApp (Local MiniCluster)" type="Application" factoryName="Application">
+    <option name="MAIN_CLASS_NAME" value="com.poc.flink.StreamingJobApp" />
+    <module name="poc-apache-flink" />
+    <envs>
+      <env name="KAFKA_BOOTSTRAP_SERVERS" value="localhost:9092" />
+      <env name="KAFKA_TOPIC_MOVEMENTS" value="movements.incoming" />
+      <env name="KAFKA_TOPIC_CURRENCIES" value="movements.currencies" />
+      <env name="KAFKA_TOPIC_RULES" value="config.rules" />
+      <env name="KAFKA_TOPIC_ALERTS" value="movements.alerts" />
+      <env name="ENRICHMENT_TIMEOUT_MS" value="30000" />
+      <env name="AWS_ENDPOINT_URL" value="http://localhost:4566" />
+      <env name="AWS_REGION" value="us-east-1" />
+      <env name="DYNAMODB_TABLE_NAME" value="poc-apache-flink-ledger-dev" />
+    </envs>
+    <method v="2">
+      <option name="Make" enabled="true" />
+    </method>
+  </configuration>
+</component>

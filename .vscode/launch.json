@@ -1,0 +1,23 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "java",
+      "name": "StreamingJobApp (Local MiniCluster)",
+      "request": "launch",
+      "mainClass": "com.poc.flink.StreamingJobApp",
+      "projectName": "poc-apache-flink",
+      "env": {
+        "KAFKA_BOOTSTRAP_SERVERS": "localhost:9092",
+        "KAFKA_TOPIC_MOVEMENTS": "movements.incoming",
+        "KAFKA_TOPIC_CURRENCIES": "movements.currencies",
+        "KAFKA_TOPIC_RULES": "config.rules",
+        "KAFKA_TOPIC_ALERTS": "movements.alerts",
+        "ENRICHMENT_TIMEOUT_MS": "30000",
+        "AWS_ENDPOINT_URL": "http://localhost:4566",
+        "AWS_REGION": "us-east-1",
+        "DYNAMODB_TABLE_NAME": "poc-apache-flink-ledger-dev"
+      }
+    }
+  ]
+}

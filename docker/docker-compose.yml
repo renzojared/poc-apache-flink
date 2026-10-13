@@ -1,0 +1,174 @@
+services:
+
+  # -------------------------------------------------------------------
+  # Floci — AWS Emulator (S3, DynamoDB, SQS, SNS)
+  # -------------------------------------------------------------------
+  floci:
+    image: floci/floci:latest
+    container_name: poc-flink-floci
+    restart: unless-stopped
+    environment:
+      FLOCI_HOSTNAME: floci
+      FLOCI_DEFAULT_REGION: us-east-1
+      FLOCI_SERVICES_DYNAMODB_ENABLED: "true"
+      FLOCI_SERVICES_S3_ENABLED: "true"
+      FLOCI_SERVICES_SQS_ENABLED: "true"
+      FLOCI_SERVICES_SNS_ENABLED: "true"
+    ports:
+      - "4566:4566"
+    networks:
+      - poc-flink-net
+
+  # -------------------------------------------------------------------
+  # DynamoDB Admin Web UI (visualización de tablas en Floci)
+  # -------------------------------------------------------------------
+  dynamodb-admin:
+    image: aaronshaf/dynamodb-admin:latest
+    container_name: poc-flink-dynamodb-admin
+    restart: unless-stopped
+    environment:
+      DYNAMO_ENDPOINT: http://floci:4566
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+    ports:
+      - "8001:8001"
+    depends_on:
+      - floci
+    networks:
+      - poc-flink-net
+
+  # -------------------------------------------------------------------
+  # Kafka (KRaft mode, lightweight single node)
+  # -------------------------------------------------------------------
+  kafka:
+    image: apache/kafka:4.3.1
+    container_name: poc-flink-kafka
+    restart: unless-stopped
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT"
+      KAFKA_LISTENERS: "CONTROLLER://:29093,PLAINTEXT_HOST://:9092,PLAINTEXT://:19092"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT_HOST://localhost:9092,PLAINTEXT://kafka:19092"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:29093"
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      CLUSTER_ID: "poc-flink-kraft-cluster"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    ports:
+      - "9092:9092"
+    networks:
+      - poc-flink-net
+
+  # -------------------------------------------------------------------
+  # Kafka Topic Initializer (Idempotent Ephemeral Container)
+  # -------------------------------------------------------------------
+  kafka-init:
+    image: apache/kafka:4.3.1
+    container_name: poc-flink-kafka-init
+    depends_on:
+      - kafka
+    entrypoint: [ "/bin/sh", "-c" ]
+    command: |
+      "
+      echo 'Waiting for Kafka broker...'
+      while ! /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --list >/dev/null 2>&1; do
+        sleep 1
+      done
+      echo 'Kafka ready. Initializing required topics...'
+      for topic in movements.incoming movements.currencies movements.alerts; do
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic \"$$topic\" --partitions 1 --replication-factor 1
+      done
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic config.rules --partitions 1 --replication-factor 1 --config cleanup.policy=compact
+      echo 'All topics successfully provisioned.'
+      "
+    networks:
+      - poc-flink-net
+
+  # -------------------------------------------------------------------
+  # Kafka UI — Web UI para inspeccionar topics, mensajes en vivo y DLQ
+  # -------------------------------------------------------------------
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: poc-flink-kafka-ui
+    restart: unless-stopped
+    ports:
+      - "8085:8080"
+    environment:
+      DYNAMIC_CONFIG_ENABLED: "true"
+      KAFKA_CLUSTERS_0_NAME: poc-flink-kraft
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:19092
+    depends_on:
+      - kafka
+    networks:
+      - poc-flink-net
+
+  # -------------------------------------------------------------------
+  # Apache Flink — JobManager (Master & Web Dashboard)
+  # -------------------------------------------------------------------
+
+  jobmanager:
+    image: flink:2.0.2-java21
+    container_name: poc-flink-jobmanager
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    command: /bin/bash -c "mkdir -p /opt/flink/plugins/s3-fs-hadoop && cp -n /opt/flink/opt/flink-s3-fs-hadoop-*.jar /opt/flink/plugins/s3-fs-hadoop/ 2>/dev/null || true; printf '\nlogger.metricgroup.name = org.apache.flink.metrics.MetricGroup\nlogger.metricgroup.level = ERROR\n' >> /opt/flink/conf/log4j-console.properties; /docker-entrypoint.sh jobmanager"
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_REGION: us-east-1
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:19092"
+      AWS_ENDPOINT_URL: "http://floci:4566"
+      DYNAMODB_TABLE_NAME: "poc-apache-flink-ledger-dev"
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: jobmanager
+        parallelism.default: 1
+        state.checkpoints.dir: s3://poc-apache-flink-storage-dev/checkpoints
+        state.savepoints.dir: s3://poc-apache-flink-storage-dev/savepoints
+        s3.endpoint: http://floci:4566
+        s3.path.style.access: true
+        s3.access-key: test
+        s3.secret-key: test
+    depends_on:
+      - floci
+      - kafka
+    networks:
+      - poc-flink-net
+
+  # -------------------------------------------------------------------
+  # Apache Flink — TaskManager (Worker)
+  # -------------------------------------------------------------------
+  taskmanager:
+    image: flink:2.0.2-java21
+    container_name: poc-flink-taskmanager
+    restart: unless-stopped
+    command: /bin/bash -c "mkdir -p /opt/flink/plugins/s3-fs-hadoop && cp -n /opt/flink/opt/flink-s3-fs-hadoop-*.jar /opt/flink/plugins/s3-fs-hadoop/ 2>/dev/null || true; printf '\nlogger.metricgroup.name = org.apache.flink.metrics.MetricGroup\nlogger.metricgroup.level = ERROR\n' >> /opt/flink/conf/log4j-console.properties; /docker-entrypoint.sh taskmanager"
+
+    depends_on:
+      - jobmanager
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_REGION: us-east-1
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:19092"
+      AWS_ENDPOINT_URL: "http://floci:4566"
+      DYNAMODB_TABLE_NAME: "poc-apache-flink-ledger-dev"
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: jobmanager
+        taskmanager.numberOfTaskSlots: 2
+        parallelism.default: 1
+        s3.endpoint: http://floci:4566
+        s3.path.style.access: true
+        s3.access-key: test
+        s3.secret-key: test
+    networks:
+      - poc-flink-net
+
+networks:
+  poc-flink-net:
+    name: poc-flink-net
